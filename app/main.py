@@ -12,6 +12,7 @@ from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_kb import router as kb_router
 from app.api.routes_omnichannel import router as omnichannel_router
+from app.api.routes_superadmin import router as superadmin_router
 from app.api.routes_widget import router as widget_router
 from app.core.config import settings
 from app.db.session import engine
@@ -90,6 +91,7 @@ app.include_router(chat_router, prefix="/api/v1")
 app.include_router(kb_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(widget_router, prefix="/api/v1")
+app.include_router(superadmin_router, prefix="/api/v1")
 app.include_router(omnichannel_router, prefix="/api/v1/omnichannel", tags=["Omnichannel"])
 
 

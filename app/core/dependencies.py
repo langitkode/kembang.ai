@@ -71,6 +71,25 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+# ── Superadmin guard ──────────────────────────────────────────────────────────
+
+
+async def require_superadmin(user: CurrentUser) -> User:
+    """Ensure the current user has the ``superadmin`` role.
+
+    Raises 403 if the user is not a platform-level superadmin.
+    """
+    if user.role != "superadmin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="superadmin_required",
+        )
+    return user
+
+
+SuperAdminUser = Annotated[User, Depends(require_superadmin)]
+
+
 # ── Tenant ────────────────────────────────────────────────────────────────────
 
 

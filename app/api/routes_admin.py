@@ -12,6 +12,11 @@ from app.services.usage_service import UsageService
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+@router.get("/api-key")
+async def get_api_key(db: DBSession, user: CurrentUser, tenant: CurrentTenant):
+    """Retrieve the current API Key for the tenant's widget."""
+    return {"api_key": tenant.api_key}
+
 @router.post("/generate-api-key")
 async def generate_api_key(db: DBSession, user: CurrentUser, tenant: CurrentTenant):
     """Generate or rotate the API Key for the current tenant's widget."""

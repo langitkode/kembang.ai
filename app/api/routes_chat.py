@@ -35,8 +35,38 @@ async def send_message(
     return ChatResponse(**result)
 
 
+@router.get("/sessions", response_model=ConversationListResponse)
+async def get_sessions(
+    db: DBSession,
+    user: CurrentUser,
+    tenant: CurrentTenant,
+):
+    """Retrieve all conversations for the tenant."""
+    from app.models.conversation import Conversation
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.tenant_id == tenant.id)
+        .order_by(Conversation.updated_at.desc())
+    )
+    conversations = result.scalars().all()
+
+    return ConversationListResponse(
+        conversations=[
+            ConversationOut(
+                id=str(c.id),
+                user_identifier=c.user_identifier,
+                created_at=c.created_at.isoformat() if c.created_at else None,
+                updated_at=c.updated_at.isoformat() if c.updated_at else None,
+                summary=c.summary
+            )
+            for c in conversations
+        ]
+    )
+
+
 @router.get("/history/{conversation_id}", response_model=HistoryResponse)
 async def get_history(
+
     conversation_id: UUID,
     db: DBSession,
     user: CurrentUser,

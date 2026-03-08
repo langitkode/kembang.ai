@@ -1,25 +1,45 @@
-# ---------- build stage ----------
-FROM python:3.11-slim AS builder
+# Use a Python image with uv pre-installed
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
 
-WORKDIR /build
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# Install the project into `/app`
+WORKDIR /app
 
-# ---------- runtime stage ----------
-FROM python:3.11-slim
+# Enable bytecode compilation
+ENV UV_COMPILE_BYTECODE=1
+
+# Copy from the cache instead of linking since it's a separate volume
+ENV UV_LINK_MODE=copy
+
+# Install dependencies
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --no-install-project --no-dev
+
+# -------- Runtime Stage --------
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /install /usr/local
+# Copy the environment
+COPY --from=builder /app/.venv /app/.venv
 
-# Copy application code
+# Copy the rest of the application
 COPY . .
 
-# Non-root user
-RUN adduser --disabled-password --no-create-home appuser
+# Place executable on path
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Pre-download the SentenceTransformer model to speed up Space startup
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+# Set application port for Hugging Face
+EXPOSE 7860
+
+# Non-root user for security
+RUN adduser --disabled-password --no-create-home appuser && \
+    chown -R appuser:appuser /app
 USER appuser
 
-EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use uvicorn on port 7860
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]

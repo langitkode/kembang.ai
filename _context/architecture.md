@@ -1,7 +1,6 @@
 # System Architecture
 
-High level architecture
-
+High level architecture:
 Client
 ↓
 API Gateway
@@ -17,7 +16,6 @@ Clients:
 - internal dashboard
 
 FastAPI Modules:
-
 auth
 tenants
 conversations
@@ -28,7 +26,6 @@ monitoring
 admin
 
 Infrastructure:
-
 PostgreSQL
 Redis
 Vector DB

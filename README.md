@@ -71,7 +71,3 @@ Webhooks can be configured at:
 `/api/v1/omnichannel/webhook/{tenant_id}/{platform}`
 
 Supported platforms: `whatsapp`, `telegram`, `generic`.
-
-## 📄 License
-
-MIT

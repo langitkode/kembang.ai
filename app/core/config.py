@@ -1,5 +1,6 @@
 """Application settings loaded from environment variables."""
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -30,18 +31,42 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     # ── App ────────────────────────────────────────────────────────────────
-    APP_ENV: str = "development"
-    DEBUG: bool = True
-    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    APP_ENV: str = "production"  # Changed from development
+    DEBUG: bool = False  # Changed to False for production
+    CORS_ORIGINS: str | list[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:8000",
+        "https://kembang-tenant.vercel.app",  # Tenant Dashboard
+        "https://kembang-console.vercel.app",  # Superadmin Console
+        "https://*.hf.space",  # Allow all Hugging Face Spaces
+        "https://huggingface.co",
+    ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: str | list[str]) -> list[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v.startswith("["):
+                return [i.strip() for i in v.split(",") if i.strip()]
+            else:
+                import json
+                return json.loads(v)
+        return v
 
     # ── RAG tuning ────────────────────────────────────────────────────────
     CHUNK_SIZE: int = 400
     CHUNK_OVERLAP: int = 80
-    MAX_CONTEXT_TOKENS: int = 1500
-    HISTORY_LIMIT: int = 6
+    MAX_CONTEXT_TOKENS: int = 600  # Reduced from 1500 for cost optimization
+    HISTORY_LIMIT: int = 3  # Reduced from 6 for cost optimization
     VECTOR_TOP_K: int = 8
     KEYWORD_TOP_K: int = 8
     RERANK_TOP_K: int = 4
+    
+    # ── Cache configuration ───────────────────────────────────────────────
+    RESPONSE_CACHE_TTL: int = 7200  # 2 hours
+    RESPONSE_CACHE_MAXSIZE: int = 1000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

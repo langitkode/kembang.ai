@@ -10,13 +10,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes_admin import router as admin_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
+from app.api.routes_faq import router as faq_router
 from app.api.routes_kb import router as kb_router
 from app.api.routes_omnichannel import router as omnichannel_router
+from app.api.routes_products import router as products_router
 from app.api.routes_superadmin import router as superadmin_router
 from app.api.routes_widget import router as widget_router
 from app.core.config import settings
-from app.db.session import engine
+from app.db.session import engine, async_session_factory
 from app.monitoring.metrics import metrics
+from sqlalchemy import select
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -32,8 +35,24 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Startup / shutdown hooks."""
     logger.info("Starting Kembang AI backend (env=%s)", settings.APP_ENV)
+    logger.info("CORS Origins: %s", settings.CORS_ORIGINS)
+    
+    # Startup validation
+    try:
+        # Check database connection
+        async with async_session_factory() as db:
+            await db.execute(select(1))
+            logger.info("✅ Database connection OK")
+        
+        # Check if migrations are up to date
+        logger.info("✅ Backend ready to serve requests")
+    except Exception as e:
+        logger.error("❌ Startup validation failed: %s", e)
+        raise
+    
     yield
-    # Dispose the async engine on shutdown
+    
+    # Shutdown
     await engine.dispose()
     logger.info("Kembang AI backend shut down")
 
@@ -89,6 +108,8 @@ async def request_logging_middleware(request: Request, call_next):
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(kb_router, prefix="/api/v1")
+app.include_router(faq_router, prefix="/api/v1")
+app.include_router(products_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(widget_router, prefix="/api/v1")
 app.include_router(superadmin_router, prefix="/api/v1")

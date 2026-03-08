@@ -4,10 +4,13 @@ These endpoints are restricted to users with ``role="superadmin"``.
 They provide cross-tenant visibility for the Developer Console.
 """
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
+
+logger = logging.getLogger(__name__)
 
 from app.api.schemas import (
     CreateTenantRequest,
@@ -19,7 +22,12 @@ from app.api.schemas import (
     TenantListResponse,
     TenantOut,
     TokenResponse,
+    UpdateTenantRequest,
     UsageSummaryResponse,
+    UserCreate,
+    UserUpdate,
+    UserListResponse,
+    UserOut,
 )
 from app.core.dependencies import DBSession, SuperAdminUser
 from app.core.security import create_access_token, hash_password
@@ -264,3 +272,182 @@ async def global_conversation_history(
     return HistoryResponse(
         messages=[MessageOut(role=m.role, content=m.content) for m in messages]
     )
+
+
+# ── Update Tenant ─────────────────────────────────────────────────────────────
+
+
+@router.patch("/tenants/{tenant_id}", response_model=TenantOut)
+async def update_tenant(
+    tenant_id: UUID,
+    body: UpdateTenantRequest,
+    db: DBSession,
+    user: SuperAdminUser,
+):
+    """Update tenant metadata like name or subscription plan."""
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="tenant_not_found",
+        )
+
+    if body.name is not None:
+        tenant.name = body.name
+    if body.plan is not None:
+        tenant.plan = body.plan
+
+    await db.commit()
+    await db.refresh(tenant)
+
+    # Re-calculate usage stats for the response
+    user_count = (
+        await db.execute(
+            select(func.count(User.id)).where(User.tenant_id == tenant.id)
+        )
+    ).scalar() or 0
+    doc_count = (
+        await db.execute(
+            select(func.count(Document.id))
+            .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
+            .where(KnowledgeBase.tenant_id == tenant.id)
+        )
+    ).scalar() or 0
+
+    return TenantOut(
+        id=str(tenant.id),
+        name=tenant.name,
+        plan=tenant.plan or "free",
+        api_key_masked=f"sk_...{tenant.api_key[-4:]}" if tenant.api_key else None,
+        user_count=user_count,
+        doc_count=doc_count,
+        created_at=tenant.created_at.isoformat() if tenant.created_at else None,
+    )
+
+
+# ── Delete Tenant ─────────────────────────────────────────────────────────────
+
+
+@router.delete("/tenants/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_tenant(
+    tenant_id: UUID, db: DBSession, user: SuperAdminUser
+):
+    """Permanently delete a tenant and ALL associated data."""
+    logger.info("DELETE tenant request for ID: %s", tenant_id)
+    try:
+        result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant = result.scalar_one_or_none()
+        if not tenant:
+            logger.warning("Tenant not found: %s", tenant_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="tenant_not_found",
+            )
+
+        # Safety check: Do not delete the platform tenant
+        if tenant.name in ["Kembang Platform", "Platform"]:
+            logger.warning("Attempted to delete platform tenant: %s", tenant_id)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="cannot_delete_platform_tenant",
+            )
+
+        # We bypass ORM-level db.delete() to avoid SQLAlchemy's "orphan protection"
+        # which triggers illegal UPDATE SET tenant_id=NULL on children.
+        # DB-level ON DELETE CASCADE handles all cleanup atomically.
+        from sqlalchemy import delete
+        
+        # IMPORTANT: Expunge the object from the session so SQLAlchemy 
+        # stops trying to manage its child relationships during commit.
+        db.expunge(tenant)
+        
+        await db.execute(delete(Tenant).where(Tenant.id == tenant_id))
+        
+        await db.commit()
+        logger.info("Transaction committed successfully for tenant: %s", tenant_id)
+        return None
+    except Exception as e:
+        logger.exception("Error during tenant deletion: %s", str(e))
+        raise
+
+
+# ── User Management ───────────────────────────────────────────────────────────
+
+
+@router.get("/users", response_model=UserListResponse)
+async def list_users(db: DBSession, user: SuperAdminUser):
+    """List all users across all tenants."""
+    result = await db.execute(select(User).order_by(User.email))
+    users = result.scalars().all()
+    return UserListResponse(users=users)
+
+
+@router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def create_user(body: UserCreate, db: DBSession, super_user: SuperAdminUser):
+    """Create a new user (admin or superadmin)."""
+    # Check if user already exists
+    existing = await db.execute(select(User).where(User.email == body.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="user_already_exists",
+        )
+
+    # Validate tenant if not superadmin
+    if body.role != "superadmin" and not body.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant_id_required_for_non_superadmin",
+        )
+
+    user = User(
+        email=body.email,
+        password_hash=hash_password(body.password),
+        role=body.role,
+        tenant_id=body.tenant_id,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: UUID, body: UserUpdate, db: DBSession, super_user: SuperAdminUser
+):
+    """Update user details."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found"
+        )
+
+    if body.email is not None:
+        user.email = body.email
+    if body.password is not None:
+        user.password_hash = hash_password(body.password)
+    if body.role is not None:
+        user.role = body.role
+
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(user_id: UUID, db: DBSession, super_user: SuperAdminUser):
+    """Delete a user account."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found"
+        )
+
+    # Don't delete yourself? (Optional safety check)
+    await db.delete(user)
+    await db.commit()
+    return None

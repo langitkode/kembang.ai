@@ -18,7 +18,7 @@ class KnowledgeBase(Base):
         primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tenants.id"), index=True, nullable=False
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -28,7 +28,9 @@ class KnowledgeBase(Base):
 
     # ── relationships ─────────────────────────────────────────────────────
     tenant = relationship("Tenant", back_populates="knowledge_bases")
-    documents = relationship("Document", back_populates="knowledge_base")
+    documents = relationship(
+        "Document", back_populates="knowledge_base", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class Document(Base):
@@ -38,7 +40,7 @@ class Document(Base):
         primary_key=True, default=uuid.uuid4
     )
     kb_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("knowledge_bases.id"), index=True, nullable=False
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True, nullable=False
     )
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     source_type: Mapped[str] = mapped_column(
@@ -48,7 +50,9 @@ class Document(Base):
 
     # ── relationships ─────────────────────────────────────────────────────
     knowledge_base = relationship("KnowledgeBase", back_populates="documents")
-    chunks = relationship("Chunk", back_populates="document")
+    chunks = relationship(
+        "Chunk", back_populates="document", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class Chunk(Base):

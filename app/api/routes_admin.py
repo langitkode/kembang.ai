@@ -2,14 +2,75 @@
 
 import secrets
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from uuid import UUID
 
-from app.api.schemas import UsageSummaryResponse
+from app.api.schemas import (
+    UsageSummaryResponse,
+    UserCreate,
+    UserUpdate,
+    UserListResponse,
+    UserOut,
+)
 from app.core.dependencies import CurrentTenant, CurrentUser, DBSession
+from app.core.security import hash_password
+from app.models.user import User
 from app.services.usage_service import UsageService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.get("/users", response_model=UserListResponse)
+async def list_team_users(db: DBSession, user: CurrentUser, tenant: CurrentTenant):
+    """List all users in the current tenant."""
+    result = await db.execute(
+        select(User).where(User.tenant_id == tenant.id).order_by(User.email)
+    )
+    users = result.scalars().all()
+    return UserListResponse(users=users)
+
+
+@router.post("/users", response_model=UserOut, status_code=201)
+async def create_team_user(
+    body: UserCreate, db: DBSession, user: CurrentUser, tenant: CurrentTenant
+):
+    """Add a new user to the tenant team."""
+    # Check if user already exists
+    existing = await db.execute(select(User).where(User.email == body.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="user_already_exists")
+
+    new_user = User(
+        tenant_id=tenant.id,
+        email=body.email,
+        password_hash=hash_password(body.password),
+        role=body.role,
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
+
+
+@router.delete("/users/{user_id}", status_code=204)
+async def delete_team_user(
+    user_id: UUID, db: DBSession, user: CurrentUser, tenant: CurrentTenant
+):
+    """Remove a user from the tenant team."""
+    result = await db.execute(
+        select(User).where(User.id == user_id).where(User.tenant_id == tenant.id)
+    )
+    target_user = result.scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="user_not_found")
+
+    if target_user.id == user.id:
+        raise HTTPException(status_code=400, detail="cannot_delete_self")
+
+    await db.delete(target_user)
+    await db.commit()
+    return None
 
 
 @router.get("/api-key")

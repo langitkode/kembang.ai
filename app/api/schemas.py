@@ -27,6 +27,23 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    role: str = "admin"
+    tenant_id: uuid.UUID | None = None
+
+
+class UserUpdate(BaseModel):
+    email: EmailStr | None = None
+    password: str | None = None
+    role: str | None = None
+
+
+class UserListResponse(BaseModel):
+    users: list[UserOut]
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
@@ -113,6 +130,11 @@ class CreateTenantRequest(BaseModel):
     name: str
     admin_email: EmailStr
     admin_password: str
+
+
+class UpdateTenantRequest(BaseModel):
+    name: str | None = None
+    plan: str | None = None
 
 
 class PlatformStatsResponse(BaseModel):

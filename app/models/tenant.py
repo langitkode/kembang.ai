@@ -24,7 +24,27 @@ class Tenant(Base):
     )
 
     # ── relationships ─────────────────────────────────────────────────────
-    users = relationship("User", back_populates="tenant", lazy="selectin")
+    users = relationship(
+        "User", back_populates="tenant", lazy="selectin", cascade="all, delete-orphan", passive_deletes=True
+    )
     knowledge_bases = relationship(
-        "KnowledgeBase", back_populates="tenant", lazy="selectin"
+        "KnowledgeBase",
+        back_populates="tenant",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    faqs = relationship(
+        "TenantFAQ",
+        back_populates="tenant",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    products = relationship(
+        "Product",
+        back_populates="tenant",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

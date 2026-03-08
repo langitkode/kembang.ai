@@ -13,6 +13,7 @@ from app.db.session import Base
 # Import all models so that Base.metadata is complete
 import app.models.tenant  # noqa: F401
 import app.models.user  # noqa: F401
+import app.models.faq  # noqa: F401
 import app.models.conversation  # noqa: F401
 import app.models.message  # noqa: F401
 import app.models.document  # noqa: F401

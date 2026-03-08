@@ -16,7 +16,7 @@ class UsageLog(Base):
         primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tenants.id"), index=True, nullable=False
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
     )
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)

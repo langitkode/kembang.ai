@@ -108,43 +108,45 @@ class SlotExtractor:
     
     def extract(self, message: str, current_slots: ConversationSlots) -> ConversationSlots:
         """Extract slots from user message."""
-        message_lower = message.lower()
-        slots = ConversationSlots(**current_slots.dict())
-        
-        # Extract in order of specificity
-        
-        # 1. Extract quantity
-        if slots.quantity == 1:
-            quantity = self._extract_quantity(message_lower)
-            if quantity:
-                slots.quantity = quantity
-        
-        # 2. Extract selected product
-        if not slots.selected_product_id:
-            product = self._extract_product_selection(message_lower)
-            if product and product not in ['pcs', 'buah', 'paket', 'set']:
-                slots.selected_product_name = product
-        
-        # 3. Extract budget (only if looks like money)
-        if slots.budget_min is None and self._looks_like_budget(message_lower):
-            budget = self._extract_budget(message_lower)
-            if budget:
-                slots.budget_min, slots.budget_max = budget
-        
-        # 4. Extract product type
-        if not slots.product_type:
-            slots.product_type = self._extract_product_type(message_lower)
-        
-        # 5. Extract skin type
-        if not slots.skin_type:
-            slots.skin_type = self._extract_skin_type(message_lower)
-        
-        # 6. Extract skin concern
-        if not slots.concern:
-            slots.concern = self._extract_skin_concern(message_lower)
-        
-        logger.debug("Extracted slots: %s", slots.to_dict())
-        return slots
+        try:
+            message_lower = message.lower()
+            slots = ConversationSlots(**current_slots.dict())
+            
+            # 1. Extract quantity
+            if slots.quantity == 1:
+                quantity = self._extract_quantity(message_lower)
+                if quantity:
+                    slots.quantity = quantity
+            
+            # 2. Extract selected product
+            if not slots.selected_product_id:
+                product = self._extract_product_selection(message_lower)
+                if product and product not in ['pcs', 'buah', 'paket', 'set']:
+                    slots.selected_product_name = product
+            
+            # 3. Extract budget (only if looks like money)
+            if slots.budget_min is None and self._looks_like_budget(message_lower):
+                budget = self._extract_budget(message_lower)
+                if budget:
+                    slots.budget_min, slots.budget_max = budget
+            
+            # 4. Extract product type
+            if not slots.product_type:
+                slots.product_type = self._extract_product_type(message_lower)
+            
+            # 5. Extract skin type
+            if not slots.skin_type:
+                slots.skin_type = self._extract_skin_type(message_lower)
+            
+            # 6. Extract skin concern
+            if not slots.concern:
+                slots.concern = self._extract_skin_concern(message_lower)
+            
+            logger.debug("Extracted slots: %s", slots.to_dict())
+            return slots
+        except Exception as e:
+            logger.warning("Slot extraction error: %s. Returning current slots.", e)
+            return current_slots  # Return original slots on error
     
     def _looks_like_budget(self, message: str) -> bool:
         """Check if message looks like it's about budget."""

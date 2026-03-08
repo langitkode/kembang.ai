@@ -75,17 +75,34 @@ class SalesRAGService:
         
         # 5. Handle state transition and get response
         try:
+            logger.debug("Calling state handler with state: %s, message: %s", state.stage.value, user_message[:50])
+            
             response_text, new_state = self._state_handler.handle_state(
                 state=state,
                 user_message=user_message,
                 context_from_rag=context_from_rag,
             )
+            
+            logger.debug("State handler returned: %s, new_state: %s", response_text[:50] if response_text else "None", new_state.stage.value)
+            
         except Exception as e:
-            logger.exception("Error in state handler: %s", e)
-            # Fallback to simple response
-            response_text = "Maaf, terjadi kesalahan. Bisa ulangi pertanyaan kamu?"
-            new_state = state
-            new_state.stage = ConversationStage.GREETING_DONE
+            logger.exception("❌ Error in state handler: %s", e)
+            logger.error("State: %s, Message: %s, Context: %s", state.stage.value, user_message[:100], context_from_rag[:100] if context_from_rag else None)
+            
+            # Only use fallback for critical errors
+            # For normal errors, try to continue with RAG
+            if "catalog" in str(e).lower() or "database" in str(e).lower() or "async" in str(e).lower():
+                # Database/catalog error - use simple response
+                logger.warning("Critical error, using fallback response")
+                response_text = "Maaf, saya sedang mengalami gangguan. Bisa coba lagi?"
+                new_state = state
+                new_state.stage = ConversationStage.GREETING_DONE
+            else:
+                # Other errors - try RAG fallback
+                logger.warning("Non-critical error, falling back to RAG: %s", e)
+                return await self._generate_rag_response(
+                    conv, user_message, tenant_id, None
+                )
         
         # 6. Update conversation state
         conv.state = new_state.to_dict()

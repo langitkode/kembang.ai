@@ -92,9 +92,7 @@ class RAGService:
         """
         # 1. Ensure conversation exists
         if conversation_id:
-            conv = await self._conversation.get_conversation(
-                conversation_id, tenant_id
-            )
+            conv = await self._conversation.get_conversation(conversation_id, tenant_id)
         else:
             conv = None
 
@@ -107,128 +105,114 @@ class RAGService:
         await self._conversation.add_message(conv.id, "user", user_message)
 
         # 3. NEW: Get tenant-specific intent router and classify intent
-        intent_router = await self._get_intent_router(tenant_id)
-        intent_result = intent_router.classify(user_message)
-        logger.info(
-            "Intent classification: %s (confidence: %.2f) for message: %s",
-            intent_result.intent.value,
-            intent_result.confidence,
-            user_message[:50]
-        )
+        try:
+            intent_router = await self._get_intent_router(tenant_id)
+            intent_result = intent_router.classify(user_message)
+            logger.info(
+                "Intent classification: %s (confidence: %.2f) for message: %s",
+                intent_result.intent.value,
+                intent_result.confidence,
+                user_message[:50]
+            )
+        except Exception as e:
+            logger.exception("Error in intent classification: %s", e)
+            # Fallback to RAG if intent classification fails
+            intent_result = None
+        
+        # 4. Route based on intent (if classification succeeded)
+        if intent_result:
+            if intent_result.intent == IntentType.FAQ:
+                # FAQ: Return cached answer, NO LLM
+                logger.info("FAQ match: Returning cached answer")
 
-        # 4. Route based on intent
-        if intent_result.intent == IntentType.FAQ:
-            # FAQ: Return cached answer, NO LLM
-            logger.info("FAQ match: Returning cached answer")
-            
-            # Format response to be more human
-            formatted_response = self._formatter.format(
-                intent_result.cached_answer,
-                intent="faq"
-            )
-            
-            await self._conversation.add_message(
-                conv.id, "assistant", formatted_response
-            )
-            return {
-                "conversation_id": str(conv.id),
-                "reply": formatted_response,
-                "sources": [],
-                "intent": "faq",
-                "llm_used": False,
-            }
-
-        elif intent_result.intent == IntentType.GREETING:
-            # Greeting: Return formatted cached response, NO LLM
-            logger.info("Greeting detected: Returning cached response")
-            
-            # Format with time-based greeting
-            formatted_response = self._formatter.format(
-                intent_result.cached_answer,
-                intent="greeting"
-            )
-            
-            await self._conversation.add_message(
-                conv.id, "assistant", formatted_response
-            )
-            return {
-                "conversation_id": str(conv.id),
-                "reply": formatted_response,
-                "sources": [],
-                "intent": "greeting",
-                "llm_used": False,
-            }
-
-        elif intent_result.intent == IntentType.SMALLTALK:
-            # Smalltalk: Return formatted cached response, NO LLM
-            logger.info("Smalltalk detected: Returning cached response")
-            
-            formatted_response = self._formatter.format(
-                intent_result.cached_answer,
-                intent="smalltalk"
-            )
-            
-            await self._conversation.add_message(
-                conv.id, "assistant", formatted_response
-            )
-            return {
-                "conversation_id": str(conv.id),
-                "reply": formatted_response,
-                "sources": [],
-                "intent": "smalltalk",
-                "llm_used": False,
-            }
-
-        elif intent_result.intent == IntentType.TOOL:
-            # Tool: Execute tool function, NO LLM
-            tool_name = intent_result.payload.get("tool_name")
-            tool_params = intent_result.payload.get("params", {})
-            logger.info("Tool trigger: %s with params %s", tool_name, tool_params)
-            
-            tool_result = await execute_tool(tool_name, tool_params)
-            
-            if "error" in tool_result:
-                # Fallback to RAG if tool fails
-                logger.warning("Tool execution failed, falling back to RAG")
-                return await self._generate_rag_response(
-                    conv, user_message, tenant_id
+                # Format response to be more human
+                formatted_response = self._formatter.format(
+                    intent_result.cached_answer,
+                    intent="faq"
                 )
-            
-            reply = self._format_tool_response(tool_result)
-            await self._conversation.add_message(conv.id, "assistant", reply)
-            return {
-                "conversation_id": str(conv.id),
-                "reply": reply,
-                "sources": [],
-                "intent": "tool",
-                "llm_used": False,
-            }
 
-        else:
-            # RAG: Full pipeline with LLM
-            # First, check response cache
-            cache_key = f"{tenant_id}:{hashlib.sha256(user_message.lower().encode()).hexdigest()[:16]}"
-            cached_response = self._response_cache.get(tenant_id, user_message)
-            
-            if cached_response:
-                logger.info("Response cache HIT: Returning cached LLM response")
-                # Store message in conversation
                 await self._conversation.add_message(
-                    conv.id, "assistant", cached_response["reply"]
+                    conv.id, "assistant", formatted_response
                 )
                 return {
                     "conversation_id": str(conv.id),
-                    "reply": cached_response["reply"],
-                    "sources": cached_response.get("sources", []),
-                    "intent": "rag_cached",
+                    "reply": formatted_response,
+                    "sources": [],
+                    "intent": "faq",
                     "llm_used": False,
-                    "from_cache": True,
                 }
-            
-            logger.info("Response cache MISS: Using RAG pipeline")
-            return await self._generate_rag_response(
-                conv, user_message, tenant_id, cache_key
-            )
+
+            elif intent_result.intent == IntentType.GREETING:
+                # Greeting: Return formatted cached response, NO LLM
+                logger.info("Greeting detected: Returning cached response")
+
+                # Format with time-based greeting
+                formatted_response = self._formatter.format(
+                    intent_result.cached_answer,
+                    intent="greeting"
+                )
+
+                await self._conversation.add_message(
+                    conv.id, "assistant", formatted_response
+                )
+                return {
+                    "conversation_id": str(conv.id),
+                    "reply": formatted_response,
+                    "sources": [],
+                    "intent": "greeting",
+                    "llm_used": False,
+                }
+
+            elif intent_result.intent == IntentType.SMALLTALK:
+                # Smalltalk: Return formatted cached response, NO LLM
+                logger.info("Smalltalk detected: Returning cached response")
+
+                formatted_response = self._formatter.format(
+                    intent_result.cached_answer,
+                    intent="smalltalk"
+                )
+
+                await self._conversation.add_message(
+                    conv.id, "assistant", formatted_response
+                )
+                return {
+                    "conversation_id": str(conv.id),
+                    "reply": formatted_response,
+                    "sources": [],
+                    "intent": "smalltalk",
+                    "llm_used": False,
+                }
+
+            elif intent_result.intent == IntentType.TOOL:
+                # Tool: Execute tool function, NO LLM
+                tool_name = intent_result.payload.get("tool_name")
+                tool_params = intent_result.payload.get("params", {})
+                logger.info("Tool trigger: %s with params %s", tool_name, tool_params)
+
+                tool_result = await execute_tool(tool_name, tool_params)
+
+                if "error" in tool_result:
+                    # Fallback to RAG if tool fails
+                    logger.warning("Tool execution failed, falling back to RAG")
+                    return await self._generate_rag_response(
+                        conv, user_message, tenant_id
+                    )
+
+                reply = self._format_tool_response(tool_result)
+                await self._conversation.add_message(conv.id, "assistant", reply)
+                return {
+                    "conversation_id": str(conv.id),
+                    "reply": reply,
+                    "sources": [],
+                    "intent": "tool",
+                    "llm_used": False,
+                }
+
+        # 5. Default: RAG pipeline with LLM
+        logger.info("No match found, using RAG pipeline")
+        return await self._generate_rag_response(
+            conv, user_message, tenant_id
+        )
 
     async def _generate_rag_response(
         self,

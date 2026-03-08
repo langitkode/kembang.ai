@@ -70,12 +70,33 @@ class StateHandler:
         user_message: str,
         context: Optional[str] = None,
     ) -> tuple[str, ConversationState]:
-        """Handle INIT state - send greeting."""
-        response = (
-            "Halo! 👋 Selamat datang! \n\n"
-            "Saya asisten virtual siap membantu kamu menemukan produk yang cocok. "
-            "Ada yang bisa saya bantu hari ini? 😊"
-        )
+        """Handle INIT state - send greeting (dynamic based on time)."""
+        import datetime
+        
+        # Get current time for dynamic greeting
+        now = datetime.datetime.now()
+        hour = now.hour
+        
+        if 5 <= hour < 12:
+            time_greeting = "Selamat pagi! ☀️"
+        elif 12 <= hour < 15:
+            time_greeting = "Selamat siang! 🌞"
+        elif 15 <= hour < 18:
+            time_greeting = "Selamat sore! 🌅"
+        else:
+            time_greeting = "Selamat malam! 🌙"
+        
+        # Random greeting variations
+        import random
+        greetings = [
+            f"{time_greeting} Ada yang bisa saya bantu?",
+            f"{time_greeting} Senang bertemu kamu! Mau cari apa hari ini?",
+            f"{time_greeting} Saya siap bantu kamu menemukan produk yang cocok! 😊",
+            f"Hi! 👋 {time_greeting} Ada yang mau ditanyakan?",
+        ]
+        
+        response = random.choice(greetings)
+        
         state.stage = ConversationStage.GREETING_DONE
         return response, state
     
@@ -85,11 +106,17 @@ class StateHandler:
         user_message: str,
         context: Optional[str] = None,
     ) -> tuple[str, ConversationState]:
-        """Handle GREETING_DONE - user just greeted, check their query."""
-        # Extract slots from first query
+        """Handle GREETING_DONE - user just greeted, check their query (flexible)."""
+        # Extract slots from message
         state.slots = self.slot_extractor.extract(user_message, state.slots)
         
-        # If user asked about product, move to ASKING_PRODUCT
+        # Check if user provided complete info (skip to showing products)
+        if state.slots.product_type and state.slots.budget_min:
+            # User gave product + budget in first message
+            state.stage = ConversationStage.SHOWING_PRODUCTS
+            return self._handle_showing_products(state, user_message, context)
+        
+        # If user asked about product
         if state.slots.product_type:
             state.stage = ConversationStage.ASKING_PRODUCT
             return self._handle_asking_product(state, user_message, context)
@@ -99,14 +126,25 @@ class StateHandler:
             state.stage = ConversationStage.ASKING_LOCATION
             return self._handle_asking_location(state, user_message, context)
         
-        # Otherwise, use RAG context
+        # If user asked about price/budget
+        if self.slot_extractor._looks_like_budget(user_message):
+            state.stage = ConversationStage.ASKING_BUDGET
+            return (
+                "Budget berapa? 💰\n"
+                "(contoh: 50k, 100ribuan, di bawah 200k)"
+            ), state
+        
+        # Otherwise, use RAG context or ask what they need
         if context:
-            state.stage = ConversationStage.ASKING_PRODUCT
+            state.stage = ConversationStage.GREETING_DONE
             return f"{context}\n\nAda yang mau ditanyakan lagi? 😊", state
         
-        # Fallback
+        # Default - ask what product they want
         state.stage = ConversationStage.ASKING_PRODUCT
-        return "Boleh tahu kamu lagi cari produk apa? 📦", state
+        return (
+            "Boleh tahu kamu lagi cari produk apa? 📦\n"
+            "(skincare, makeup, bodycare, atau haircare?)"
+        ), state
     
     def _handle_asking_product(
         self,
@@ -114,11 +152,37 @@ class StateHandler:
         user_message: str,
         context: Optional[str] = None,
     ) -> tuple[str, ConversationState]:
-        """Handle ASKING_PRODUCT - gather product requirements."""
+        """Handle ASKING_PRODUCT - gather product requirements (flexible)."""
         # Extract slots
         state.slots = self.slot_extractor.extract(user_message, state.slots)
         
-        # Check what we have
+        # Check if user provided budget directly (skip flow)
+        if state.slots.budget_min and not state.slots.product_type:
+            # User mentioned budget first
+            state.stage = ConversationStage.ASKING_PRODUCT
+            return (
+                "Siap! Untuk budget Rp {:,.0f}, kamu cari produk apa? 📦".format(
+                    state.slots.budget_min
+                )
+            ), state
+        
+        # Check if user provided skin type + budget (complete info)
+        if state.slots.product_type and state.slots.skin_type and state.slots.budget_min:
+            # Got all info, show products immediately
+            state.stage = ConversationStage.SHOWING_PRODUCTS
+            return self._handle_showing_products(state, user_message, context)
+        
+        # Check if user provided product + budget (skip skin type)
+        if state.slots.product_type and state.slots.budget_min and not state.slots.skin_type:
+            # User skipped skin type, that's OK
+            state.stage = ConversationStage.SHOWING_PRODUCTS
+            return (
+                f"Oke, untuk {state.slots.product_type} budget Rp {state.slots.budget_min:,.0f}, "
+                "ini rekomendasiku! 🎉\n\n"
+                "Ada preferensi jenis kulit tertentu? Atau mau langsung lihat produk?"
+            ), state
+        
+        # Normal flow - ask missing info
         if state.slots.product_type and not state.slots.skin_type:
             # Got product type, ask skin type
             state.stage = ConversationStage.ASKING_PRODUCT
@@ -139,11 +203,6 @@ class StateHandler:
                 "(contoh: 50k, 100ribuan, di bawah 200k)"
             ), state
         
-        if state.slots.product_type and state.slots.skin_type and state.slots.budget_min:
-            # Got all info, show products
-            state.stage = ConversationStage.SHOWING_PRODUCTS
-            return self._handle_showing_products(state, user_message, context)
-        
         # Not enough info yet
         if not state.slots.product_type:
             return (
@@ -151,6 +210,8 @@ class StateHandler:
                 "(skincare, makeup, bodycare, atau haircare?)"
             ), state
         
+        # Default fallback
+        state.stage = ConversationStage.ASKING_PRODUCT
         return "Ada yang mau ditanyakan lagi tentang produk ini? 😊", state
     
     def _handle_asking_budget(

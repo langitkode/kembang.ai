@@ -5,7 +5,14 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app.api.schemas import ChatRequest, ChatResponse, HistoryResponse, MessageOut
+from app.api.schemas import (
+    ChatRequest,
+    ChatResponse,
+    ConversationListResponse,
+    ConversationOut,
+    HistoryResponse,
+    MessageOut,
+)
 from app.core.dependencies import CurrentTenant, CurrentUser, DBSession
 from app.models.message import Message
 from app.services.conversation_service import ConversationService

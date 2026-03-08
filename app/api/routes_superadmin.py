@@ -13,6 +13,8 @@ from app.api.schemas import (
     CreateTenantRequest,
     ConversationListResponse,
     ConversationOut,
+    HistoryResponse,
+    MessageOut,
     PlatformStatsResponse,
     TenantListResponse,
     TenantOut,
@@ -23,6 +25,7 @@ from app.core.dependencies import DBSession, SuperAdminUser
 from app.core.security import create_access_token, hash_password
 from app.models.conversation import Conversation
 from app.models.document import Document, KnowledgeBase
+from app.models.message import Message
 from app.models.tenant import Tenant
 from app.models.usage_log import UsageLog
 from app.models.user import User
@@ -227,4 +230,37 @@ async def global_conversations(db: DBSession, user: SuperAdminUser):
             )
             for c in conversations
         ]
+    )
+
+
+# ── Global Conversation History ──────────────────────────────────────────────
+
+
+@router.get("/conversations/{conversation_id}", response_model=HistoryResponse)
+async def global_conversation_history(
+    conversation_id: UUID, db: DBSession, user: SuperAdminUser
+):
+    """Retrieve all messages for a specific conversation across the platform."""
+    # Verify the conversation exists
+    result = await db.execute(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    conv = result.scalar_one_or_none()
+
+    if conv is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="conversation_not_found",
+        )
+
+    # Get all messages
+    msg_result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at)
+    )
+    messages = msg_result.scalars().all()
+
+    return HistoryResponse(
+        messages=[MessageOut(role=m.role, content=m.content) for m in messages]
     )

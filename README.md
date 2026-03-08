@@ -1,3 +1,13 @@
+---
+title: Kembang AI Backend
+emoji: 🌸
+colorFrom: pink
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Kembang AI Backend 🌸
 
 Professional multi-tenant AI chatbot SaaS optimized for UMKM, featuring a **100% Free RAG Pipeline**.

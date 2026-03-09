@@ -101,23 +101,23 @@ class SalesRAGService:
                 # Other errors - try RAG fallback
                 logger.warning("Non-critical error, falling back to RAG: %s", e)
                 return await self._generate_rag_response(
-                    conv, user_message, tenant_id, None
+                    conv, user_message, tenant_id
                 )
-        
+
         # 6. Update conversation state
         conv.state = new_state.to_dict()
         await self._db.commit()
-        
+
         # 7. Store assistant response
         await self._conversation.add_message(conv.id, "assistant", response_text)
-        
+
         logger.info(
             "State transition: %s → %s (slots: %s)",
             state.stage.value,
             new_state.stage.value,
             new_state.slots.to_dict()
         )
-        
+
         return {
             "conversation_id": str(conv.id),
             "reply": response_text,
@@ -126,3 +126,32 @@ class SalesRAGService:
             "state": new_state.to_dict(),
             "llm_used": context_from_rag is not None,
         }
+
+    async def _generate_rag_response(
+        self,
+        conv,
+        user_message: str,
+        tenant_id: uuid.UUID,
+    ) -> dict:
+        """Fallback to RAG pipeline with LLM when state handler fails.
+        
+        Args:
+            conv: Conversation object
+            user_message: User message
+            tenant_id: Tenant identifier
+            
+        Returns:
+            Response dict with conversation_id, reply, sources, etc.
+        """
+        from app.services.rag_service import RAGService
+        
+        # Create a temporary RAG service for fallback
+        rag_service = RAGService(db=self._db)
+        
+        # Use RAG service to generate response
+        return await rag_service.generate_response(
+            tenant_id=tenant_id,
+            conversation_id=conv.id,
+            user_identifier=conv.user_identifier,
+            user_message=user_message,
+        )

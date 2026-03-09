@@ -5,10 +5,13 @@ They provide cross-tenant visibility for the Developer Console.
 """
 
 import logging
+import math
+from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import func, select, or_
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,7 @@ from app.api.schemas import (
     UserListResponse,
     UserOut,
 )
+from app.api.schemas_pagination import PaginationInfo
 from app.core.dependencies import DBSession, SuperAdminUser
 from app.core.security import create_access_token, hash_password
 from app.models.conversation import Conversation
@@ -219,7 +223,11 @@ async def global_usage(db: DBSession, user: SuperAdminUser):
 
 @router.get("/conversations", response_model=ConversationListResponse)
 async def global_conversations(db: DBSession, user: SuperAdminUser):
-    """List recent conversations across ALL tenants (most recent first)."""
+    """List recent conversations across ALL tenants (most recent first).
+    
+    DEPRECATED: Use /conversations/paginated instead for better performance.
+    This endpoint returns only last 100 conversations.
+    """
     result = await db.execute(
         select(Conversation)
         .order_by(Conversation.updated_at.desc())
@@ -239,6 +247,84 @@ async def global_conversations(db: DBSession, user: SuperAdminUser):
             for c in conversations
         ]
     )
+
+
+@router.get("/conversations/paginated")
+async def list_conversations_paginated(
+    db: DBSession,
+    user: SuperAdminUser,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
+    tenant_id: Optional[UUID] = Query(None, description="Filter by tenant ID"),
+    date_from: Optional[datetime] = Query(None, description="Filter from date"),
+    date_to: Optional[datetime] = Query(None, description="Filter to date"),
+    search: Optional[str] = Query(None, description="Search user_identifier or summary"),
+):
+    """List conversations across ALL tenants with pagination and filters.
+    
+    - **page**: Page number (starts from 1)
+    - **page_size**: Items per page (1-100, default: 50)
+    - **tenant_id**: Optional filter by specific tenant
+    - **date_from**: Optional filter from date (YYYY-MM-DD)
+    - **date_to**: Optional filter to date (YYYY-MM-DD)
+    - **search**: Optional search in user_identifier or summary
+    
+    Returns conversations ordered by updated_at DESC (newest first).
+    """
+    # Build base query
+    query = select(Conversation)
+    
+    # Apply filters
+    if tenant_id:
+        query = query.where(Conversation.tenant_id == tenant_id)
+    if date_from:
+        query = query.where(Conversation.updated_at >= date_from)
+    if date_to:
+        query = query.where(Conversation.updated_at <= date_to)
+    if search:
+        query = query.where(
+            or_(
+                Conversation.user_identifier.ilike(f"%{search}%"),
+                Conversation.summary.ilike(f"%{search}%")
+            )
+        )
+    
+    # Get total count BEFORE pagination
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+    
+    # Apply pagination
+    offset = (page - 1) * page_size
+    query = query.order_by(Conversation.updated_at.desc()).offset(offset).limit(page_size)
+    
+    # Execute query
+    result = await db.execute(query)
+    conversations = result.scalars().all()
+    
+    # Calculate pagination
+    total_pages = math.ceil(total / page_size) if total > 0 else 0
+    
+    return {
+        "conversations": [
+            {
+                "id": str(c.id),
+                "user_identifier": c.user_identifier,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+                "summary": c.summary,
+            }
+            for c in conversations
+        ],
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
+        }
+    }
 
 
 # ── Global Conversation History ──────────────────────────────────────────────

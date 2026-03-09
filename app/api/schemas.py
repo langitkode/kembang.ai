@@ -1,8 +1,9 @@
 """Pydantic schemas for request / response validation."""
 
 import uuid
+import re
 
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -32,12 +33,45 @@ class UserCreate(BaseModel):
     password: str
     role: str = "admin"
     tenant_id: uuid.UUID | None = None
+    
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v):
+        """Enforce strong password policy."""
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not re.search(r'[A-Z]', v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r'[a-z]', v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r'\d', v):
+            raise ValueError("Password must contain at least one number")
+        if not re.search(r'[@$!%*?&#]', v):
+            raise ValueError("Password must contain at least one special character (@$!%*?&#)")
+        return v
 
 
 class UserUpdate(BaseModel):
     email: EmailStr | None = None
     password: str | None = None
     role: str | None = None
+    
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v):
+        """Enforce strong password policy."""
+        if v is not None:
+            if len(v) < 8:
+                raise ValueError("Password must be at least 8 characters long")
+            if not re.search(r'[A-Z]', v):
+                raise ValueError("Password must contain at least one uppercase letter")
+            if not re.search(r'[a-z]', v):
+                raise ValueError("Password must contain at least one lowercase letter")
+            if not re.search(r'\d', v):
+                raise ValueError("Password must contain at least one number")
+            if not re.search(r'[@$!%*?&#]', v):
+                raise ValueError("Password must contain at least one special character (@$!%*?&#)")
+        return v
 
 
 class UserListResponse(BaseModel):
@@ -48,6 +82,22 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     tenant_name: str | None = None
+    
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v):
+        """Enforce strong password policy."""
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not re.search(r'[A-Z]', v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r'[a-z]', v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r'\d', v):
+            raise ValueError("Password must contain at least one number")
+        if not re.search(r'[@$!%*?&#]', v):
+            raise ValueError("Password must contain at least one special character (@$!%*?&#)")
+        return v
 
 
 # ── Chat ──────────────────────────────────────────────────────────────────────

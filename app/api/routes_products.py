@@ -6,6 +6,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.api.schemas_product import (
@@ -18,6 +19,7 @@ from app.api.schemas_product import (
     BulkUploadResponse,
 )
 from app.core.dependencies import CurrentTenant, CurrentUser, DBSession
+from app.core.dependencies import require_superadmin
 from app.models.product import Product
 from app.services.catalog_service import CatalogService
 
@@ -118,6 +120,152 @@ async def list_products(
         page=page,
         page_size=page_size,
         total_pages=total_pages,
+    )
+
+
+# ── Superadmin Statistics Endpoints (MUST BE BEFORE /{product_id}) ───────────
+
+
+class ProductStatsResponse(BaseModel):
+    """Response schema for product statistics."""
+    total_products: int
+    by_category: list[dict]
+    by_tenant: list[dict]
+    low_stock_count: int
+    avg_price: float
+
+
+class ProductLowStockResponse(BaseModel):
+    """Response schema for low stock products."""
+    threshold: int
+    products: list[dict]
+
+
+from app.models.tenant import Tenant
+
+
+@router.get("/stats", response_model=ProductStatsResponse, tags=["superadmin"])
+async def get_product_stats(
+    db: DBSession,
+    user: CurrentUser = require_superadmin,
+):
+    """Get product statistics across all tenants.
+
+    Requires superadmin access.
+    """
+    # Total products
+    total_result = await db.execute(select(func.count(Product.id)))
+    total_products = total_result.scalar() or 0
+
+    # By category
+    category_result = await db.execute(
+        select(
+            Product.category,
+            func.count(Product.id).label('count')
+        )
+        .where(Product.is_active == True)
+        .group_by(Product.category)
+        .order_by(func.count(Product.id).desc())
+    )
+    by_category = [
+        {"category": row.category, "count": row.count}
+        for row in category_result.all()
+    ]
+
+    # By tenant
+    tenant_result = await db.execute(
+        select(
+            Product.tenant_id,
+            func.count(Product.id).label('count')
+        )
+        .where(Product.is_active == True)
+        .group_by(Product.tenant_id)
+        .order_by(func.count(Product.id).desc())
+    )
+
+    # OPTIMIZATION: Get all tenant names in SINGLE query (fixes N+1 problem)
+    tenant_ids = [row.tenant_id for row in tenant_result.all()]
+
+    if tenant_ids:
+        tenants_result = await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+        )
+        tenant_map = {str(t.id): t.name for t in tenants_result.all()}
+    else:
+        tenant_map = {}
+
+    by_tenant = []
+    for row in tenant_result.all():
+        tenant_name = tenant_map.get(str(row.tenant_id), "Unknown")
+        by_tenant.append({
+            "tenant_id": str(row.tenant_id),
+            "tenant_name": tenant_name,
+            "count": row.count
+        })
+
+    # Low stock count (below 10)
+    low_stock_result = await db.execute(
+        select(func.count(Product.id))
+        .where(Product.stock_quantity < 10)
+        .where(Product.is_active == True)
+    )
+    low_stock_count = low_stock_result.scalar() or 0
+
+    # Average price
+    avg_price_result = await db.execute(
+        select(func.avg(Product.price))
+        .where(Product.is_active == True)
+    )
+    avg_price = float(avg_price_result.scalar() or 0)
+
+    return ProductStatsResponse(
+        total_products=total_products,
+        by_category=by_category,
+        by_tenant=by_tenant,
+        low_stock_count=low_stock_count,
+        avg_price=avg_price
+    )
+
+
+@router.get("/low-stock", response_model=ProductLowStockResponse, tags=["superadmin"])
+async def get_low_stock_products(
+    db: DBSession,
+    threshold: int = Query(10, ge=1, description="Stock threshold for low stock alert"),
+    user: CurrentUser = require_superadmin,
+):
+    """Get products with low stock across all tenants.
+
+    Requires superadmin access.
+    """
+    products_result = await db.execute(
+        select(
+            Product.id,
+            Product.name,
+            Product.stock_quantity,
+            Product.category,
+            Product.tenant_id
+        )
+        .join(Tenant, Tenant.id == Product.tenant_id)
+        .where(Product.stock_quantity < threshold)
+        .where(Product.is_active == True)
+        .order_by(Product.stock_quantity.asc())
+        .limit(50)
+    )
+
+    products = []
+    for row in products_result.all():
+        products.append({
+            "id": str(row.id),
+            "tenant_id": str(row.tenant_id),
+            "name": row.name,
+            "stock_quantity": row.stock_quantity,
+            "category": row.category,
+            "is_low_stock": row.stock_quantity < threshold
+        })
+
+    return ProductLowStockResponse(
+        threshold=threshold,
+        products=products
     )
 
 

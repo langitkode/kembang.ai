@@ -1,15 +1,21 @@
 """Auth routes – login and registration."""
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from sqlalchemy import select
+from datetime import datetime, timedelta
 
 from app.api.schemas import LoginRequest, RegisterRequest, TokenResponse, UserOut
 from app.core.dependencies import DBSession, CurrentUser
+from app.core.rate_limiter import limiter, AUTH_LIMIT
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.tenant import Tenant
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Account lockout configuration
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_DURATION_MINUTES = 15
 
 
 @router.get("/me", response_model=UserOut)
@@ -19,7 +25,8 @@ async def get_me(user: CurrentUser):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: DBSession):
+@limiter.limit(AUTH_LIMIT)
+async def login(request: Request, body: LoginRequest, db: DBSession):
     """Authenticate user and return a JWT."""
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
@@ -34,8 +41,9 @@ async def login(body: LoginRequest, db: DBSession):
     return TokenResponse(access_token=token)
 
 
-@router.post("/register", response_model=TokenResponse, status_code=201)
-async def register(body: RegisterRequest, db: DBSession):
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(AUTH_LIMIT)
+async def register(request: Request, body: RegisterRequest, db: DBSession):
     """Create a new user (and optionally a new tenant)."""
     # Check for existing email
     existing = await db.execute(select(User).where(User.email == body.email))

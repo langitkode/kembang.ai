@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,8 +48,13 @@ class UsageService:
 
     # ── Read ──────────────────────────────────────────────────────────────
 
-    async def tenant_usage_summary(self, tenant_id: uuid.UUID) -> dict:
-        """Aggregate usage stats for a tenant.
+    async def tenant_usage_summary(
+        self, 
+        tenant_id: uuid.UUID,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> dict:
+        """Aggregate usage stats for a tenant with optional date filtering.
 
         Returns::
 
@@ -59,14 +65,20 @@ class UsageService:
                 "estimated_cost": 1.23,
             }
         """
-        result = await self._db.execute(
-            select(
-                func.count(UsageLog.id).label("requests"),
-                func.coalesce(func.sum(UsageLog.input_tokens), 0).label("input_tokens"),
-                func.coalesce(func.sum(UsageLog.output_tokens), 0).label("output_tokens"),
-                func.coalesce(func.sum(UsageLog.cost_estimate), 0.0).label("cost"),
-            ).where(UsageLog.tenant_id == tenant_id)
-        )
+        query = select(
+            func.count(UsageLog.id).label("requests"),
+            func.coalesce(func.sum(UsageLog.input_tokens), 0).label("input_tokens"),
+            func.coalesce(func.sum(UsageLog.output_tokens), 0).label("output_tokens"),
+            func.coalesce(func.sum(UsageLog.cost_estimate), 0.0).label("cost"),
+        ).where(UsageLog.tenant_id == tenant_id)
+        
+        # Add date filters
+        if date_from:
+            query = query.where(UsageLog.timestamp >= date_from)
+        if date_to:
+            query = query.where(UsageLog.timestamp <= date_to)
+        
+        result = await self._db.execute(query)
         row = result.one()
         return {
             "requests": row.requests,

@@ -1,10 +1,12 @@
 """Admin routes – usage monitoring and tenant management."""
 
 import secrets
-
-from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from datetime import datetime
+from typing import Optional
 from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import select
 
 from app.api.schemas import (
     UsageSummaryResponse,
@@ -93,8 +95,22 @@ async def get_usage(
     db: DBSession,
     user: CurrentUser,
     tenant: CurrentTenant,
+    date_from: Optional[datetime] = Query(None, description="Filter from date (inclusive)"),
+    date_to: Optional[datetime] = Query(None, description="Filter to date (inclusive)"),
 ):
-    """Return aggregated usage statistics for the current tenant."""
+    """Return aggregated usage statistics for the current tenant.
+    
+    Supports optional date range filtering.
+    
+    - **date_from**: Filter usage from this date (e.g., 2026-03-01)
+    - **date_to**: Filter usage until this date (e.g., 2026-03-09)
+    
+    If no dates provided, returns ALL historical data.
+    """
     usage_svc = UsageService(db)
-    summary = await usage_svc.tenant_usage_summary(tenant.id)
+    summary = await usage_svc.tenant_usage_summary(
+        tenant_id=tenant.id,
+        date_from=date_from,
+        date_to=date_to
+    )
     return UsageSummaryResponse(**summary)

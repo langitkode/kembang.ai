@@ -6,8 +6,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
 
 from app.api.routes_admin import router as admin_router
+from app.api.routes_api_keys import router as api_keys_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_faq import router as faq_router
@@ -17,6 +19,7 @@ from app.api.routes_products import router as products_router
 from app.api.routes_superadmin import router as superadmin_router
 from app.api.routes_widget import router as widget_router
 from app.core.config import settings
+from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.db.session import engine, async_session_factory
 from app.monitoring.metrics import metrics
 from sqlalchemy import select
@@ -66,6 +69,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Rate Limiting ─────────────────────────────────────────────────────────────
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
 
 app.add_middleware(
@@ -103,6 +111,27 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
+# ── Security Headers Middleware ───────────────────────────────────────────────
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    
+    # Prevent clickjacking
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    # HSTS (only in production)
+    if not settings.DEBUG:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
+    return response
+
+
 # ── Routers ───────────────────────────────────────────────────────────────────
 
 app.include_router(auth_router, prefix="/api/v1")
@@ -110,6 +139,7 @@ app.include_router(chat_router, prefix="/api/v1")
 app.include_router(kb_router, prefix="/api/v1")
 app.include_router(faq_router, prefix="/api/v1")
 app.include_router(products_router, prefix="/api/v1")
+app.include_router(api_keys_router, prefix="/api/v1/superadmin")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(widget_router, prefix="/api/v1")
 app.include_router(superadmin_router, prefix="/api/v1")

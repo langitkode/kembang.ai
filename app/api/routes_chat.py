@@ -1,5 +1,6 @@
 """Chat routes – send messages and retrieve history."""
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -19,6 +20,8 @@ from app.services.conversation_service import ConversationService
 from app.services.rag_service import RAGService
 from app.services.sales_rag_service import SalesRAGService
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
@@ -30,30 +33,35 @@ async def send_message(
     tenant: CurrentTenant,
 ):
     """Process a chat message through the sales RAG pipeline.
-    
+
     Uses state machine for sales-oriented conversations:
     - INIT → GREETING → ASKING_PRODUCT → ASKING_BUDGET → SHOWING_PRODUCTS → CHECKOUT
     """
     # Use SalesRAGService for stateful conversations
     rag = SalesRAGService(db)
     conv_id = UUID(body.conversation_id) if body.conversation_id else None
-    
+
     # Get context from RAG if needed (for product info, etc.)
     # For now, we'll let the state machine handle it
     context_from_rag = None
-    
-    # For product-related queries, get context from RAG
+
+    # For product-related queries, get context from RAG retrieval ONLY (not full response)
     if any(word in body.message.lower() for word in ["produk", "product", "harga", "beli", "pesan"]):
-        # Fall back to regular RAG for product context
+        # Get context from regular RAG service WITHOUT storing messages
         regular_rag = RAGService(db)
-        rag_result = await regular_rag.generate_response(
-            tenant_id=tenant.id,
-            conversation_id=conv_id,
-            user_identifier=body.user_identifier,
-            user_message=body.message,
-        )
-        context_from_rag = rag_result.get("reply")
-    
+        try:
+            # Retrieve context only (don't store messages)
+            context_from_rag = await regular_rag.retrieve_context(
+                query=body.message,
+                tenant_id=tenant.id
+            )
+            # context_from_rag is tuple: (context_text, source_ids)
+            context_from_rag = context_from_rag[0] if isinstance(context_from_rag, tuple) else None
+            logger.info("Retrieved RAG context for product query: %d chars", len(context_from_rag) if context_from_rag else 0)
+        except Exception as e:
+            logger.warning("Failed to retrieve RAG context: %s", e)
+            context_from_rag = None
+
     result = await rag.generate_response(
         tenant_id=tenant.id,
         conversation_id=conv_id,

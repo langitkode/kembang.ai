@@ -5,8 +5,9 @@ import shutil
 import uuid
 import asyncio
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status, Header
 from sqlalchemy import select
 
 from app.api.schemas import DocumentListResponse, DocumentOut
@@ -90,15 +91,55 @@ async def upload_document(
 async def list_documents(
     db: DBSession,
     user: CurrentUser,
-    tenant: CurrentTenant,
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
 ):
-    """List all documents across the tenant's knowledge bases."""
-    result = await db.execute(
-        select(Document)
-        .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
-        .where(KnowledgeBase.tenant_id == tenant.id)
-        .order_by(Document.created_at.desc())
-    )
+    """List all documents.
+    
+    Access control:
+    - Superadmin: Can view ALL documents from all tenants
+    - Superadmin with X-Tenant-ID: View documents from specific tenant
+    - Tenant Admin: View documents from their tenant only (auto-filter)
+    """
+    # Superadmin can view all documents
+    if user.role == "superadmin":
+        if x_tenant_id:
+            # Filter by specific tenant
+            try:
+                tenant_uuid = uuid.UUID(x_tenant_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="invalid_tenant_id_format",
+                )
+            
+            result = await db.execute(
+                select(Document)
+                .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
+                .where(KnowledgeBase.tenant_id == tenant_uuid)
+                .order_by(Document.created_at.desc())
+            )
+            logger.info("Superadmin viewing documents for tenant: %s", tenant_uuid)
+        else:
+            # Return ALL documents from all tenants
+            result = await db.execute(
+                select(Document)
+                .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
+                .order_by(Document.created_at.desc())
+            )
+            logger.info("Superadmin viewing ALL documents")
+    
+    # Tenant admin - auto-filter by their tenant
+    else:
+        # Get tenant from user record
+        tenant_uuid = user.tenant_id
+        result = await db.execute(
+            select(Document)
+            .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
+            .where(KnowledgeBase.tenant_id == tenant_uuid)
+            .order_by(Document.created_at.desc())
+        )
+        logger.info("Tenant admin viewing documents for tenant: %s", tenant_uuid)
+    
     docs = result.scalars().all()
 
     return DocumentListResponse(
@@ -114,15 +155,32 @@ async def delete_document(
     document_id: uuid.UUID,
     db: DBSession,
     user: CurrentUser,
-    tenant: CurrentTenant,
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
 ):
-    """Delete a document and its associated chunks/embeddings."""
-    # Find the document and verify it belongs to the current tenant
+    """Delete a document and its associated chunks/embeddings.
+    
+    Access control:
+    - Superadmin: Can delete any document (optionally with X-Tenant-ID)
+    - Tenant Admin: Can delete documents from their tenant only
+    """
+    # Determine tenant ID
+    if user.role == "superadmin" and x_tenant_id:
+        try:
+            tenant_uuid = uuid.UUID(x_tenant_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_tenant_id_format",
+            )
+    else:
+        tenant_uuid = user.tenant_id
+    
+    # Find the document and verify it belongs to the tenant
     result = await db.execute(
         select(Document)
         .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
         .where(Document.id == document_id)
-        .where(KnowledgeBase.tenant_id == tenant.id)
+        .where(KnowledgeBase.tenant_id == tenant_uuid)
     )
     doc = result.scalar_one_or_none()
 
@@ -132,10 +190,9 @@ async def delete_document(
             detail="document_not_found",
         )
 
-    # In a real system, you'd also want to delete the actual vector embeddings
-    # from pgvector and any local files.
     await db.delete(doc)
     await db.commit()
+    logger.info("Deleted document %s for tenant %s", document_id, tenant_uuid)
     return None
 
 
@@ -144,18 +201,35 @@ async def get_document_chunks(
     document_id: uuid.UUID,
     db: DBSession,
     user: CurrentUser,
-    tenant: CurrentTenant,
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
 ):
-    """Get chunk count and preview for a document (debug endpoint)."""
+    """Get chunk count and preview for a document (debug endpoint).
+    
+    Access control:
+    - Superadmin: Can view any document's chunks
+    - Tenant Admin: Can view chunks from their tenant only
+    """
+    # Determine tenant ID
+    if user.role == "superadmin" and x_tenant_id:
+        try:
+            tenant_uuid = uuid.UUID(x_tenant_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_tenant_id_format",
+            )
+    else:
+        tenant_uuid = user.tenant_id
+    
     from sqlalchemy import func
     from app.models.document import Chunk
-    
+
     # Find the document
     result = await db.execute(
         select(Document)
         .join(KnowledgeBase, KnowledgeBase.id == Document.kb_id)
         .where(Document.id == document_id)
-        .where(KnowledgeBase.tenant_id == tenant.id)
+        .where(KnowledgeBase.tenant_id == tenant_uuid)
     )
     doc = result.scalar_one_or_none()
 

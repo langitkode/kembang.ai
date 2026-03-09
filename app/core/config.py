@@ -11,12 +11,28 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://kembang:kembang@localhost:5432/kembang_db"
 
     # ── Redis ─────────────────────────────────────────────────────────────
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str | None = None  # Upstash Redis URL (optional for rate limiting)
 
     # ── JWT Auth ──────────────────────────────────────────────────────────
     JWT_SECRET: str = "change-me"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_MINUTES: int = 60
+
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, v):
+        """Ensure JWT secret is strong enough."""
+        if not v or v == "change-me":
+            raise ValueError(
+                "JWT_SECRET must be set to a secure random string (min 32 characters). "
+                "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        if len(v) < 32:
+            raise ValueError(
+                f"JWT_SECRET must be at least 32 characters long (got {len(v)}). "
+                "Use a secure random string for production."
+            )
+        return v
 
     # ── LLM Providers ────────────────────────────────────────────────────────
     # LiteLLM will automatically pick these up if present in the environment

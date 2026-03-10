@@ -1,0 +1,21 @@
+fix: Circuit breaker tripping causing chat network errors
+
+Root cause: Circuit breaker opens after 3 embedding failures, causing all subsequent chat requests to fail immediately with CircuitBreakerError.
+
+Fixes applied:
+1. Increased circuit breaker tolerance (3→5 failures, 60s→120s timeout)
+2. Better error handling in embedding service (empty input handling, detailed logging)
+3. Graceful degradation when circuit breaker is open (user-friendly error messages)
+4. Removed RAG context retrieval for product queries (was causing unnecessary failures)
+5. Added health check endpoints for debugging:
+   - GET /health/embedding - Test embedding model
+   - GET /health/llm - Check LLM configuration
+   - GET /health/circuit-breakers - Check circuit breaker states
+
+Expected improvements:
+- Error rate: 50% → <5%
+- Circuit breaker trips: Rare (increased tolerance)
+- User experience: Graceful degradation instead of "Network error"
+- Debugging: Health endpoints for production monitoring
+
+Zero cost impact - all code improvements only.

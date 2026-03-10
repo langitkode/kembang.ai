@@ -19,6 +19,7 @@ from app.services.conversation_state_machine import ConversationState, Conversat
 from app.services.slot_extractor import get_slot_extractor
 from app.services.state_handlers import StateHandler
 from app.services.usage_service import UsageService
+from app.utils.circuit_breaker import CircuitBreakerError
 
 logger = logging.getLogger(__name__)
 
@@ -76,19 +77,26 @@ class SalesRAGService:
         # 5. Handle state transition and get response
         try:
             logger.debug("Calling state handler with state: %s, message: %s", state.stage.value, user_message[:50])
-            
+
             response_text, new_state = self._state_handler.handle_state(
                 state=state,
                 user_message=user_message,
                 context_from_rag=context_from_rag,
             )
-            
+
             logger.debug("State handler returned: %s, new_state: %s", response_text[:50] if response_text else "None", new_state.stage.value)
-            
+
+        except CircuitBreakerError as e:
+            # Circuit breaker is open - services unavailable
+            logger.error("❌ Circuit breaker open: %s. Using graceful degradation.", e)
+            response_text = "Maaf, sistem sedang mengalami gangguan. Silakan coba beberapa saat lagi."
+            new_state = state
+            new_state.stage = ConversationStage.GREETING_DONE
+
         except Exception as e:
             logger.exception("❌ Error in state handler: %s", e)
             logger.error("State: %s, Message: %s, Context: %s", state.stage.value, user_message[:100], context_from_rag[:100] if context_from_rag else None)
-            
+
             # Only use fallback for critical errors
             # For normal errors, try to continue with RAG
             if "catalog" in str(e).lower() or "database" in str(e).lower() or "async" in str(e).lower():
@@ -134,24 +142,47 @@ class SalesRAGService:
         tenant_id: uuid.UUID,
     ) -> dict:
         """Fallback to RAG pipeline with LLM when state handler fails.
-        
+
         Args:
             conv: Conversation object
             user_message: User message
             tenant_id: Tenant identifier
-            
+
         Returns:
             Response dict with conversation_id, reply, sources, etc.
         """
         from app.services.rag_service import RAGService
-        
-        # Create a temporary RAG service for fallback
-        rag_service = RAGService(db=self._db)
-        
-        # Use RAG service to generate response
-        return await rag_service.generate_response(
-            tenant_id=tenant_id,
-            conversation_id=conv.id,
-            user_identifier=conv.user_identifier,
-            user_message=user_message,
-        )
+        from app.utils.circuit_breaker import CircuitBreakerError
+
+        try:
+            # Create a temporary RAG service for fallback
+            rag_service = RAGService(db=self._db)
+
+            # Use RAG service to generate response
+            return await rag_service.generate_response(
+                tenant_id=tenant_id,
+                conversation_id=conv.id,
+                user_identifier=conv.user_identifier,
+                user_message=user_message,
+            )
+        except CircuitBreakerError as e:
+            # Circuit breaker open - return graceful degradation
+            logger.error("RAG fallback failed (circuit open): %s", e)
+            return {
+                "conversation_id": str(conv.id),
+                "reply": "Maaf, sistem sedang mengalami gangguan. Silakan coba beberapa saat lagi.",
+                "sources": [],
+                "intent": "fallback",
+                "state": {"stage": "greeting_done", "slots": {}},
+                "llm_used": False,
+            }
+        except Exception as e:
+            logger.exception("RAG fallback failed: %s", e)
+            return {
+                "conversation_id": str(conv.id),
+                "reply": "Maaf, saya mengalami kesalahan. Bisa ulangi pertanyaan?",
+                "sources": [],
+                "intent": "error",
+                "state": {"stage": "greeting_done", "slots": {}},
+                "llm_used": False,
+            }

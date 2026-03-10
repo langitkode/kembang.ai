@@ -83,7 +83,12 @@ class EmbeddingService:
 
     def __init__(self):
         # Use the singleton model
-        self._model = get_model()
+        try:
+            self._model = get_model()
+            logger.info("EmbeddingService initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize embedding model: %s", e)
+            raise
         self._breaker = get_embedding_breaker()
 
     async def embed_query(self, text: str) -> list[float]:
@@ -92,8 +97,16 @@ class EmbeddingService:
 
     def _embed_query_internal(self, text: str) -> list[float]:
         """Internal embedding method (wrapped by circuit breaker)."""
-        embedding = self._model.encode(text)
-        return embedding.tolist()
+        try:
+            if not text or not text.strip():
+                logger.warning("Empty text provided for embedding")
+                return [0.0] * 384  # Return zero vector for empty input
+
+            embedding = self._model.encode(text)
+            return embedding.tolist()
+        except Exception as e:
+            logger.error("Embedding query failed: %s (text length: %d)", e, len(text))
+            raise
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Return embedding vectors for a batch of texts."""
@@ -103,5 +116,26 @@ class EmbeddingService:
 
     def _embed_documents_internal(self, texts: list[str]) -> list[list[float]]:
         """Internal batch embedding method (wrapped by circuit breaker)."""
-        embeddings = self._model.encode(texts)
-        return embeddings.tolist()
+        try:
+            # Filter empty texts
+            valid_texts = [t for t in texts if t and t.strip()]
+            if not valid_texts:
+                logger.warning("All texts empty for embedding")
+                return [[0.0] * 384 for _ in texts]
+
+            embeddings = self._model.encode(valid_texts)
+
+            # Pad with zero vectors for empty texts
+            result = []
+            valid_idx = 0
+            for text in texts:
+                if text and text.strip():
+                    result.append(embeddings[valid_idx].tolist())
+                    valid_idx += 1
+                else:
+                    result.append([0.0] * 384)
+
+            return result
+        except Exception as e:
+            logger.error("Embedding documents failed: %s (batch size: %d)", e, len(texts))
+            raise

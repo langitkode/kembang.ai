@@ -161,6 +161,88 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/health/embedding")
+async def health_check_embedding():
+    """Check embedding model health.
+
+    Returns:
+        {"status": "ok", "model": "model-name"} if healthy
+        {"status": "error", "error": "message"} if unhealthy
+    """
+    try:
+        from app.services.embedding_service import get_model
+        model = get_model()
+        # Test embedding with simple text
+        test_embedding = model.encode("test")
+        return {
+            "status": "ok",
+            "model": "all-MiniLM-L6-v2",
+            "embedding_dim": len(test_embedding),
+        }
+    except Exception as e:
+        logger.error("Embedding health check failed: %s", e)
+        return {"status": "error", "error": str(e)}
+
+
+@app.get("/health/llm")
+async def health_check_llm():
+    """Check LLM connectivity (does not generate, just checks config).
+
+    Returns:
+        {"status": "ok", "model": "default-model"} if configured
+        {"status": "error", "error": "message"} if misconfigured
+    """
+    try:
+        from app.core.config import settings
+        # Just check if model is configured (don't actually call API)
+        model = settings.DEFAULT_LLM_MODEL
+        if not model:
+            return {"status": "error", "error": "No LLM model configured"}
+        return {
+            "status": "ok",
+            "model": model,
+            "fallback_model": settings.FALLBACK_LLM_MODEL,
+        }
+    except Exception as e:
+        logger.error("LLM health check failed: %s", e)
+        return {"status": "error", "error": str(e)}
+
+
+@app.get("/health/circuit-breakers")
+async def health_check_circuit_breakers():
+    """Check circuit breaker states.
+
+    Returns status of all circuit breakers (CLOSED = healthy, OPEN = unhealthy)
+    """
+    from app.utils.circuit_breaker import (
+        get_llm_breaker,
+        get_embedding_breaker,
+        get_retrieval_breaker,
+    )
+
+    llm_breaker = get_llm_breaker()
+    embedding_breaker = get_embedding_breaker()
+    retrieval_breaker = get_retrieval_breaker()
+
+    return {
+        "llm": {
+            "state": llm_breaker.state.value,
+            "failure_count": llm_breaker.failure_count,
+            "healthy": llm_breaker.state.value == "closed",
+        },
+        "embedding": {
+            "state": embedding_breaker.state.value,
+            "failure_count": embedding_breaker.failure_count,
+            "healthy": embedding_breaker.state.value == "closed",
+        },
+        "retrieval": {
+            "state": retrieval_breaker.state.value,
+            "failure_count": retrieval_breaker.failure_count,
+            "healthy": retrieval_breaker.state.value == "closed",
+        },
+    }
+
+
 @app.get("/metrics")
 async def get_metrics():
     """Return in-memory request metrics."""

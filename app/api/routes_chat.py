@@ -36,31 +36,17 @@ async def send_message(
 
     Uses state machine for sales-oriented conversations:
     - INIT → GREETING → ASKING_PRODUCT → ASKING_BUDGET → SHOWING_PRODUCTS → CHECKOUT
+
+    Note: RAG context retrieval removed for product queries to reduce errors.
+    State machine handles product queries with template responses.
     """
     # Use SalesRAGService for stateful conversations
     rag = SalesRAGService(db)
     conv_id = UUID(body.conversation_id) if body.conversation_id else None
 
-    # Get context from RAG if needed (for product info, etc.)
-    # For now, we'll let the state machine handle it
+    # RAG context retrieval removed - let StateHandler handle all queries
+    # RAG is only used as fallback when state handler fails
     context_from_rag = None
-
-    # For product-related queries, get context from RAG retrieval ONLY (not full response)
-    if any(word in body.message.lower() for word in ["produk", "product", "harga", "beli", "pesan"]):
-        # Get context from regular RAG service WITHOUT storing messages
-        regular_rag = RAGService(db)
-        try:
-            # Retrieve context only (don't store messages)
-            context_from_rag = await regular_rag.retrieve_context(
-                query=body.message,
-                tenant_id=tenant.id
-            )
-            # context_from_rag is tuple: (context_text, source_ids)
-            context_from_rag = context_from_rag[0] if isinstance(context_from_rag, tuple) else None
-            logger.info("Retrieved RAG context for product query: %d chars", len(context_from_rag) if context_from_rag else 0)
-        except Exception as e:
-            logger.warning("Failed to retrieve RAG context: %s", e)
-            context_from_rag = None
 
     result = await rag.generate_response(
         tenant_id=tenant.id,

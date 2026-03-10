@@ -184,9 +184,9 @@ def get_llm_breaker() -> CircuitBreaker:
     global _llm_breaker
     if _llm_breaker is None:
         _llm_breaker = CircuitBreaker(
-            max_failures=3,
-            timeout=60,
-            max_delay=10
+            max_failures=5,      # Increased from 3 for tolerance
+            timeout=90,          # Increased from 60 for slow recovery
+            max_delay=15         # Increased from 10
         )
     return _llm_breaker
 
@@ -196,9 +196,9 @@ def get_embedding_breaker() -> CircuitBreaker:
     global _embedding_breaker
     if _embedding_breaker is None:
         _embedding_breaker = CircuitBreaker(
-            max_failures=3,
-            timeout=30,
-            max_delay=5
+            max_failures=5,      # Increased from 3 for tolerance
+            timeout=120,         # Increased from 30 for slow model load
+            max_delay=30         # Increased from 5 for cold start
         )
     return _embedding_breaker
 
@@ -208,8 +208,8 @@ def get_retrieval_breaker() -> CircuitBreaker:
     global _retrieval_breaker
     if _retrieval_breaker is None:
         _retrieval_breaker = CircuitBreaker(
-            max_failures=3,
-            timeout=30,
-            max_delay=5
+            max_failures=5,      # Increased from 3 for tolerance
+            timeout=60,          # Standard timeout
+            max_delay=10         # Standard max delay
         )
     return _retrieval_breaker

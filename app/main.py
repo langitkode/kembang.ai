@@ -39,22 +39,28 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown hooks."""
     logger.info("Starting Kembang AI backend (env=%s)", settings.APP_ENV)
     logger.info("CORS Origins: %s", settings.CORS_ORIGINS)
-    
+
     # Startup validation
     try:
         # Check database connection
         async with async_session_factory() as db:
             await db.execute(select(1))
             logger.info("✅ Database connection OK")
-        
+
+        # Pre-load embedding model to avoid cold start and permission issues
+        logger.info("Pre-loading embedding model...")
+        from app.services.embedding_service import get_model
+        get_model()  # This will cache the model
+        logger.info("✅ Embedding model loaded")
+
         # Check if migrations are up to date
         logger.info("✅ Backend ready to serve requests")
     except Exception as e:
         logger.error("❌ Startup validation failed: %s", e)
         raise
-    
+
     yield
-    
+
     # Shutdown
     await engine.dispose()
     logger.info("Kembang AI backend shut down")

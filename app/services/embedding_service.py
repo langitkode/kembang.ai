@@ -7,6 +7,7 @@ from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
+from app.utils.circuit_breaker import get_embedding_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,14 @@ class EmbeddingService:
     def __init__(self):
         # Use the singleton model
         self._model = get_model()
+        self._breaker = get_embedding_breaker()
 
     async def embed_query(self, text: str) -> list[float]:
         """Return the embedding vector for a single query string."""
+        return await self._breaker.call(self._embed_query_internal, text)
+
+    def _embed_query_internal(self, text: str) -> list[float]:
+        """Internal embedding method (wrapped by circuit breaker)."""
         embedding = self._model.encode(text)
         return embedding.tolist()
 
@@ -93,5 +99,9 @@ class EmbeddingService:
         """Return embedding vectors for a batch of texts."""
         if not texts:
             return []
+        return await self._breaker.call(self._embed_documents_internal, texts)
+
+    def _embed_documents_internal(self, texts: list[str]) -> list[list[float]]:
+        """Internal batch embedding method (wrapped by circuit breaker)."""
         embeddings = self._model.encode(texts)
         return embeddings.tolist()

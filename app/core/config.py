@@ -72,13 +72,13 @@ class Settings(BaseSettings):
         return v
 
     # ── RAG tuning ────────────────────────────────────────────────────────
-    CHUNK_SIZE: int = 400
-    CHUNK_OVERLAP: int = 80
-    MAX_CONTEXT_TOKENS: int = 600  # Reduced from 1500 for cost optimization
+    CHUNK_SIZE: int = 512  # Token-based chunking (increased from 400)
+    CHUNK_OVERLAP: int = 128  # Token-based overlap (increased from 80)
+    MAX_CONTEXT_TOKENS: int = 1500  # Increased from 600 for better context
     HISTORY_LIMIT: int = 3  # Reduced from 6 for cost optimization
-    VECTOR_TOP_K: int = 8
-    KEYWORD_TOP_K: int = 8
-    RERANK_TOP_K: int = 4
+    VECTOR_TOP_K: int = 10  # Increased from 8 for better recall
+    KEYWORD_TOP_K: int = 10  # Increased from 8
+    RERANK_TOP_K: int = 5  # Increased from 4
     
     # ── Cache configuration ───────────────────────────────────────────────
     RESPONSE_CACHE_TTL: int = 7200  # 2 hours

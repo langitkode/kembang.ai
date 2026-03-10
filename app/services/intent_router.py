@@ -1,7 +1,7 @@
 """Intent Router – classify incoming messages and route to appropriate handler.
 
 Three-tier classification:
-1. FAQ (cached keyword match) → Return cached answer, NO LLM
+1. FAQ (cached keyword match + embedding similarity) → Return cached answer, NO LLM
 2. Tool (function call) → Execute tool, NO LLM
 3. RAG (requires reasoning) → Full RAG pipeline with LLM
 
@@ -11,7 +11,7 @@ This reduces LLM costs by 60-80% for common queries.
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 from difflib import SequenceMatcher
@@ -38,13 +38,33 @@ class IntentResult:
     cached_answer: Optional[str] = None
 
 
+@dataclass
+class FAQPatternWithEmbedding:
+    """FAQ pattern with pre-computed embedding for similarity matching."""
+    regex: re.Pattern
+    answer: str
+    confidence: float
+    pattern_text: str  # Original pattern text for embedding
+    embedding: Optional[list[float]] = None  # Pre-computed embedding
+
+
 class IntentRouter:
     """Route messages to appropriate handler based on intent."""
 
-    def __init__(self, faq_patterns: Optional[list[tuple[re.Pattern, str, float]]] = None):
+    # Embedding similarity threshold for FAQ matching
+    EMBEDDING_THRESHOLD = 0.75
+
+    def __init__(
+        self,
+        faq_patterns: Optional[list[tuple[re.Pattern, str, float]]] = None,
+        faq_with_embeddings: Optional[list[FAQPatternWithEmbedding]] = None,
+    ):
         # FAQ patterns with cached answers
         # Format: [(regex_pattern, answer, confidence)]
         self._faq_patterns: list[tuple[re.Pattern, str, float]] = faq_patterns or []
+
+        # FAQ patterns with embeddings for similarity matching
+        self._faq_with_embeddings: list[FAQPatternWithEmbedding] = faq_with_embeddings or []
 
         # Greeting patterns
         self._greeting_patterns = [
@@ -58,18 +78,18 @@ class IntentRouter:
             r"\b(siapa (kamu|anda|lo)|who are you)\b",
             r"\b(makasih|terima kasih|thanks|thank you)\b",
         ]
-        
+
         # Tool triggers
         self._tool_patterns = [
             (r"\b(cek|check|status|lacak|tracking) (pesanan|order|barang)\b", "order_status"),
         ]
-        
-        # FAQ patterns - specific phrases only (not generic product queries)
-        # These should NOT match complex questions
+
+        # Embedding model (lazy-loaded)
+        self._embedding_model = None
     
     def add_faq(self, patterns: list[str], answer: str, confidence: float = 0.9):
         """Add FAQ pattern with cached answer.
-        
+
         Args:
             patterns: List of regex patterns (case-insensitive)
             answer: Cached answer to return
@@ -78,8 +98,49 @@ class IntentRouter:
         for pattern in patterns:
             regex = re.compile(pattern, re.IGNORECASE)
             self._faq_patterns.append((regex, answer, confidence))
-        
+
+            # Also store with embedding for similarity matching
+            faq_with_emb = FAQPatternWithEmbedding(
+                regex=regex,
+                answer=answer,
+                confidence=confidence,
+                pattern_text=pattern
+            )
+            self._faq_with_embeddings.append(faq_with_emb)
+
         logger.info("Added FAQ: %s → %s", patterns, answer[:50])
+
+    def _get_embedding_model(self):
+        """Lazy-load embedding model."""
+        if self._embedding_model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._embedding_model = SentenceTransformer(
+                    "all-MiniLM-L6-v2",
+                    cache_folder="/tmp/huggingface"
+                )
+                logger.info("Embedding model loaded for intent classification")
+            except Exception as e:
+                logger.warning("Failed to load embedding model: %s. Using fallback matching.", e)
+                return None
+        return self._embedding_model
+
+    def _embedding_similarity(self, text1: str, text2: str) -> float:
+        """Calculate cosine similarity between two texts using embeddings."""
+        model = self._get_embedding_model()
+        if model is None:
+            return 0.0
+
+        try:
+            embeddings = model.encode([text1, text2])
+            # Cosine similarity
+            from numpy import dot
+            from numpy.linalg import norm
+            similarity = dot(embeddings[0], embeddings[1]) / (norm(embeddings[0]) * norm(embeddings[1]))
+            return float(similarity)
+        except Exception as e:
+            logger.warning("Embedding similarity calculation failed: %s", e)
+            return 0.0
     
     def classify(self, message: str) -> IntentResult:
         """Classify message intent.
@@ -137,14 +198,34 @@ class IntentRouter:
             # Level 3: Fuzzy match (fallback)
             similarity = SequenceMatcher(None, message_lower, pattern_str).ratio()
             if similarity >= 0.75:  # 75% similar
-                logger.info("FAQ match (fuzzy %.0f%%): %s → %s", 
+                logger.info("FAQ match (fuzzy %.0f%%): %s → %s",
                            similarity * 100, message[:50], answer[:50])
                 return IntentResult(
                     intent=IntentType.FAQ,
                     confidence=confidence * similarity,  # Reduce confidence
                     cached_answer=answer
                 )
-        
+
+        # 3b. Check FAQ with embedding-based similarity (most flexible)
+        if self._faq_with_embeddings:
+            best_match = None
+            best_similarity = 0.0
+
+            for faq in self._faq_with_embeddings:
+                similarity = self._embedding_similarity(message, faq.pattern_text)
+                if similarity > best_similarity and similarity >= self.EMBEDDING_THRESHOLD:
+                    best_similarity = similarity
+                    best_match = faq
+
+            if best_match:
+                logger.info("FAQ match (embedding %.0f%%): %s → %s",
+                           best_similarity * 100, message[:50], best_match.answer[:50])
+                return IntentResult(
+                    intent=IntentType.FAQ,
+                    confidence=best_match.confidence * best_similarity,
+                    cached_answer=best_match.answer
+                )
+
         # 4. Check tool triggers
         for pattern, tool_name in self._tool_patterns:
             match = re.search(pattern, message_lower)

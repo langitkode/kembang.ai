@@ -7,6 +7,7 @@ import logging
 import litellm
 
 from app.core.config import settings
+from app.utils.circuit_breaker import get_llm_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -40,23 +41,29 @@ class LLMService:
         """
         model = model or self.route_model(messages)
 
-        response = await litellm.acompletion(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            # LiteLLM automatically picks up OPENAI_API_KEY or GROQ_API_KEY from env
-        )
+        # Wrap with circuit breaker
+        breaker = get_llm_breaker()
 
-        choice = response.choices[0]
-        usage = response.usage
+        async def _generate():
+            response = await litellm.acompletion(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                # LiteLLM automatically picks up OPENAI_API_KEY or GROQ_API_KEY from env
+            )
 
-        return {
-            "content": choice.message.content or "",
-            "model": response.model,
-            "input_tokens": usage.prompt_tokens if usage else 0,
-            "output_tokens": usage.completion_tokens if usage else 0,
-        }
+            choice = response.choices[0]
+            usage = response.usage
+
+            return {
+                "content": choice.message.content or "",
+                "model": response.model,
+                "input_tokens": usage.prompt_tokens if usage else 0,
+                "output_tokens": usage.completion_tokens if usage else 0,
+            }
+
+        return await breaker.call(_generate)
 
     # ── Streaming ─────────────────────────────────────────────────────────
 
